@@ -143,16 +143,20 @@ function Swap({ wallet, notify, tokenList, setTokenList }) {
   }, [amountIn, selectedTokenA, selectedTokenB, provider, isStable, calculatePriceImpact]);
 
   const openTokenModal = (target) => {
-    setModalTarget(target);
-    setIsModalOpen(true);
-  };
+  console.log(`Opening modal for ${target}`);
+  setModalTarget(target);
+  setIsModalOpen(true);
+};
 
-  const handleTokenSelect = (token) => {
-    if (modalTarget === 'tokenA') setSelectedTokenA(token);
-    else if (modalTarget === 'tokenB') setSelectedTokenB(token);
-    setIsModalOpen(false);
-    fetchBalances();
-  };
+const handleTokenSelect = (token) => {
+  console.log(`Selected token: ${token.symbol} for ${modalTarget}`);
+  if (modalTarget === 'tokenA') {
+    setSelectedTokenA(token);
+  } else if (modalTarget === 'tokenB') {
+    setSelectedTokenB(token);
+  }
+  setIsModalOpen(false);
+};
 
   const handleMax = async () => {
     if (!selectedTokenA) return notify("Select a token first", "error");
