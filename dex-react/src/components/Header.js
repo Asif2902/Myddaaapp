@@ -6,7 +6,7 @@ function Header({ wallet, notify }) {
   const handleConnect = async () => {
     const success = await connectWallet();
     if (success) {
-      notify(`Wallet connected: ${userAddress.slice(0, 6)}...`, 'success');
+      notify('Wallet connected successfully', 'success');
     } else {
       notify('Wallet connection failed', 'error');
     }
@@ -16,7 +16,7 @@ function Header({ wallet, notify }) {
     <header>
       <h1>A DEX V2</h1>
       {isConnected ? (
-        <span>Connected: {userAddress.slice(0, 6)}...{userAddress.slice(-4)}</span>
+        <span>Connected</span>
       ) : (
         <button id="connectWallet" onClick={handleConnect}>Connect Wallet</button>
       )}
