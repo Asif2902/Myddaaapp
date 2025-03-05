@@ -4,7 +4,7 @@ import { factoryABI } from '../contracts/factoryABI';
 import { lpTokenABI } from '../contracts/lpTokenABI';
 import { erc20ABI } from '../contracts/erc20ABI';
 import { routerABI } from '../contracts/routerABI';
-
+import { wmonABI } from '../contracts/wmonABI';
 const FACTORY_ADDRESS = "0xc98d287eFCBbb177D641FD2105dEC57996335766";
 const ROUTER_ADDRESS = "0x144e18DB06B4553b94ED397610D2FBf809790545";
 const WMON_ADDRESS = "0xf6C4e67A551bd10444e3b439A4Eb19ec46eC1215";
