@@ -1,112 +1,86 @@
-import React, { useState, useEffect } from 'react';
-import TokenModal from './TokenModal';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
-import { routerABI } from '../contracts/routerABI';
-import { erc20ABI } from '../contracts/erc20ABI';
 import { factoryABI } from '../contracts/factoryABI';
 import { lpTokenABI } from '../contracts/lpTokenABI';
+import { erc20ABI } from '../contracts/erc20ABI';
+import { routerABI } from '../contracts/routerABI';
 
-const ROUTER_ADDRESS = "0x144e18DB06B4553b94ED397610D2FBf809790545";
 const FACTORY_ADDRESS = "0xc98d287eFCBbb177D641FD2105dEC57996335766";
+const ROUTER_ADDRESS = "0x144e18DB06B4553b94ED397610D2FBf809790545";
 const WMON_ADDRESS = "0xf6C4e67A551bd10444e3b439A4Eb19ec46eC1215";
 
-function Liquidity({ wallet, notify, tokenList, setTokenList }) {
-  const [selectedTokenA, setSelectedTokenA] = useState(null);
-  const [selectedTokenB, setSelectedTokenB] = useState(null);
-  const [amountA, setAmountA] = useState('');
-  const [amountB, setAmountB] = useState('');
-  const [balances, setBalances] = useState({ tokenA: '0', tokenB: '0' });
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [modalTarget, setModalTarget] = useState('');
+function MyLiquidity({ wallet, notify, tokenList }) {
+  const [lpPositions, setLpPositions] = useState([]);
+  const [selectedLP, setSelectedLP] = useState(null);
+  const [removePercentage, setRemovePercentage] = useState(0);
   const { provider, signer, userAddress } = wallet;
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchBalances();
-    }, 15000);
-    fetchBalances();
-    return () => clearInterval(interval);
-  }, [userAddress, selectedTokenA, selectedTokenB]);
-
-  const fetchBalances = async () => {
-    if (!userAddress) return;
-    if (selectedTokenA) await fetchBalanceForToken(selectedTokenA, 'tokenA');
-    if (selectedTokenB) await fetchBalanceForToken(selectedTokenB, 'tokenB');
-  };
-
-  const fetchBalanceForToken = async (token, key) => {
-    try {
-      let balance;
-      if (token.address === "MON") {
-        balance = await provider.getBalance(userAddress);
-      } else {
-        const tokenContract = new ethers.Contract(token.address, erc20ABI, provider);
-        balance = await tokenContract.balanceOf(userAddress);
-      }
-      balance = ethers.utils.formatUnits(balance, token.decimals);
-      setBalances(prev => ({ ...prev, [key]: abbreviateNumber(parseFloat(balance)) }));
-    } catch (error) {
-      console.error(`Error fetching balance for ${token.symbol}:`, error);
+  // Memoize fetchLPPositions
+  const fetchLPPositions = useCallback(async () => {
+    if (!userAddress) {
+      console.log('No user address, skipping LP fetch');
+      return;
     }
-  };
-
-  const abbreviateNumber = (num) => {
-    if (num >= 1e12) return (num / 1e12).toFixed(2) + "T";
-    if (num >= 1e9) return (num / 1e9).toFixed(2) + "B";
-    if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
-    if (num >= 1e3) return (num / 1e3).toFixed(2) + "K";
-    return num.toFixed(5);
-  };
-
-  const isStable = async (tokenAddress) => {
-    if (tokenAddress === "MON") return false;
+    console.log('Fetching LP positions for:', userAddress);
     const factoryContract = new ethers.Contract(FACTORY_ADDRESS, factoryABI, provider);
-    return await factoryContract.isStableCoin(tokenAddress);
-  };
+    try {
+      const allPairsLength = await factoryContract.allPairsLength();
+      console.log(`Total pairs: ${allPairsLength}`);
+      let positions = [];
+      for (let i = 0; i < allPairsLength; i++) {
+        try {
+          const pairAddress = await factoryContract.allPairs(i);
+          if (pairAddress === ethers.constants.AddressZero) {
+            console.log(`Pair ${i} is zero address, skipping`);
+            continue;
+          }
+          const pairContract = new ethers.Contract(pairAddress, lpTokenABI, provider);
+          const balance = await pairContract.balanceOf(userAddress);
+          if (balance.gt(0)) {
+            const token0 = await pairContract.token0();
+            const token1 = await pairContract.token1();
+            const token0Contract = new ethers.Contract(token0, erc20ABI, provider);
+            const token1Contract = new ethers.Contract(token1, erc20ABI, provider);
+            const symbol0 = await token0Contract.symbol();
+            const symbol1 = await token1Contract.symbol();
+            const balanceFormatted = ethers.utils.formatUnits(balance, 18);
+            console.log(`Found LP: ${symbol0}-${symbol1}, Balance: ${balanceFormatted}`);
+            positions.push({
+              address: pairAddress,
+              tokenA: token0,
+              tokenB: token1,
+              symbol: `${symbol0}-${symbol1} LP`,
+              balance: balance.toString(),
+              balanceFormatted,
+            });
+          }
+        } catch (error) {
+          console.error(`Error fetching pair ${i}:`, error);
+        }
+      }
+      console.log('LP Positions fetched:', positions);
+      setLpPositions(positions);
+    } catch (error) {
+      console.error('Error fetching allPairsLength:', error);
+      notify('Failed to fetch liquidity positions', 'error');
+    }
+  }, [userAddress, provider, notify]);
 
   useEffect(() => {
-    const calculateAmountB = async () => {
-      if (!selectedTokenA || !selectedTokenB || !amountA || parseFloat(amountA) <= 0) {
-        setAmountB('');
-        return;
-      }
-      let amountA_BN = ethers.utils.parseUnits(amountA, selectedTokenA.decimals);
-      let tokenAForPair = selectedTokenA.address === "MON" ? WMON_ADDRESS : selectedTokenA.address;
-      let tokenBForPair = selectedTokenB.address === "MON" ? WMON_ADDRESS : selectedTokenB.address;
-      const factoryContract = new ethers.Contract(FACTORY_ADDRESS, factoryABI, provider);
-      const pairAddress = await factoryContract.getPair(tokenAForPair, tokenBForPair);
-      const isStableA = await isStable(tokenAForPair);
-      const isStableB = await isStable(tokenBForPair);
-      if (pairAddress !== ethers.constants.AddressZero) {
-        const pairContract = new ethers.Contract(pairAddress, lpTokenABI, provider);
-        const [reserve0, reserve1] = await pairContract.getReserves();
-        let reserveA = tokenAForPair.toLowerCase() < tokenBForPair.toLowerCase() ? reserve0 : reserve1;
-        let reserveB = tokenAForPair.toLowerCase() < tokenBForPair.toLowerCase() ? reserve1 : reserve0;
-        if (reserveA.isZero()) return;
-        let amountB;
-        if (isStableA && isStableB) {
-          const decimalsA = selectedTokenA.decimals;
-          const decimalsB = selectedTokenB.decimals;
-          amountB = amountA_BN.mul(ethers.BigNumber.from(10).pow(decimalsB)).div(ethers.BigNumber.from(10).pow(decimalsA));
-        } else {
-          amountB = amountA_BN.mul(reserveB).div(reserveA);
-        }
-        setAmountB(ethers.utils.formatUnits(amountB, selectedTokenB.decimals));
-      }
+    console.log('Setting up LP polling...');
+    fetchLPPositions(); // Initial fetch
+    const interval = setInterval(() => {
+      fetchLPPositions();
+    }, 15000);
+    return () => {
+      console.log('Cleaning up LP interval');
+      clearInterval(interval);
     };
-    calculateAmountB();
-  }, [amountA, selectedTokenA, selectedTokenB]);
+  }, [fetchLPPositions]);
 
-  const openTokenModal = (target) => {
-    setModalTarget(target);
-    setIsModalOpen(true);
-  };
-
-  const handleTokenSelect = (token) => {
-    if (modalTarget === 'tokenA') setSelectedTokenA(token);
-    else if (modalTarget === 'tokenB') setSelectedTokenB(token);
-    setIsModalOpen(false);
-    fetchBalances();
+  const handleLPSelect = (lp) => {
+    console.log('Selected LP:', lp.symbol);
+    setSelectedLP(lp);
   };
 
   const ensureApproval = async (token, amount, spender) => {
@@ -114,126 +88,154 @@ function Liquidity({ wallet, notify, tokenList, setTokenList }) {
     const tokenContract = new ethers.Contract(token.address, erc20ABI, signer);
     const allowance = await tokenContract.allowance(userAddress, spender);
     if (allowance.lt(amount)) {
-      notify(`Approving ${token.symbol}...`, "info");
+      notify(`Approving ${token.symbol || 'LP'}...`, "info");
       const tx = await tokenContract.approve(spender, amount);
       await tx.wait();
-      notify(`${token.symbol} approved successfully`, "success");
+      notify(`${token.symbol || 'LP'} approved successfully`, "success");
     }
     return true;
   };
 
-  const handleAddLiquidity = async () => {
-    if (!selectedTokenA || !selectedTokenB) return notify("Select both tokens", "error");
-    if (!amountA || parseFloat(amountA) <= 0) return notify("Enter a valid amount for Token A", "error");
-    if (!amountB || parseFloat(amountB) <= 0) return notify("Enter a valid amount for Token B", "error");
-
-    const amountA_BN = ethers.utils.parseUnits(amountA, selectedTokenA.decimals);
-    const amountB_BN = ethers.utils.parseUnits(amountB, selectedTokenB.decimals);
-    const tokenAForPair = selectedTokenA.address === "MON" ? WMON_ADDRESS : selectedTokenA.address;
-    const tokenBForPair = selectedTokenB.address === "MON" ? WMON_ADDRESS : selectedTokenB.address;
-
-    let balanceA, balanceB;
-    if (selectedTokenA.address === "MON") {
-      balanceA = await provider.getBalance(userAddress);
-    } else {
-      const tokenAContract = new ethers.Contract(selectedTokenA.address, erc20ABI, provider);
-      balanceA = await tokenAContract.balanceOf(userAddress);
-    }
-    if (selectedTokenB.address === "MON") {
-      balanceB = await provider.getBalance(userAddress);
-    } else {
-      const tokenBContract = new ethers.Contract(selectedTokenB.address, erc20ABI, provider);
-      balanceB = await tokenBContract.balanceOf(userAddress);
-    }
-    if (balanceA.lt(amountA_BN)) return notify(`Insufficient ${selectedTokenA.symbol} balance`, "error");
-    if (balanceB.lt(amountB_BN)) return notify(`Insufficient ${selectedTokenB.symbol} balance`, "error");
-
+  const handleRemoveLiquidity = async () => {
+    if (!selectedLP) return notify("Select an LP token", "error");
+    const lpBalance = ethers.BigNumber.from(selectedLP.balance);
+    const amountToRemove = lpBalance.mul(ethers.BigNumber.from(Math.floor(removePercentage * 1e6))).div(ethers.BigNumber.from(1e6));
+    console.log(`Removing ${removePercentage}% of ${selectedLP.symbol}, Amount: ${ethers.utils.formatUnits(amountToRemove, 18)}`);
     try {
-      const deadline = Math.floor(Date.now() / 1000) + 600;
+      await ensureApproval({ address: selectedLP.address, decimals: 18 }, amountToRemove, ROUTER_ADDRESS);
       const routerContract = new ethers.Contract(ROUTER_ADDRESS, routerABI, signer);
+      const deadline = Math.floor(Date.now() / 1000) + 600;
+      const pairContract = new ethers.Contract(selectedLP.address, lpTokenABI, provider);
+      const [reserve0, reserve1] = await pairContract.getReserves();
+      const totalSupply = await pairContract.totalSupply();
+      const token0 = await pairContract.token0();
+      const token1 = await pairContract.token1();
+      const reserveA = selectedLP.tokenA.toLowerCase() === token0.toLowerCase() ? reserve0 : reserve1;
+      const reserveB = selectedLP.tokenA.toLowerCase() === token0.toLowerCase() ? reserve1 : reserve0;
+      const expectedAmountA = totalSupply.gt(0) ? amountToRemove.mul(reserveA).div(totalSupply) : ethers.BigNumber.from(0);
+      const expectedAmountB = totalSupply.gt(0) ? amountToRemove.mul(reserveB).div(totalSupply) : ethers.BigNumber.from(0);
+      const amountAMin = expectedAmountA.mul(95).div(100);
+      const amountBMin = expectedAmountB.mul(95).div(100);
       let tx;
-      if (selectedTokenA.address === "MON" || selectedTokenB.address === "MON") {
-        let token, amountTokenDesired, valueETH;
-        if (selectedTokenA.address === "MON") {
-          token = selectedTokenB;
-          amountTokenDesired = amountB_BN;
-          valueETH = amountA_BN;
-        } else {
-          token = selectedTokenA;
-          amountTokenDesired = amountA_BN;
-          valueETH = amountB_BN;
-        }
-        if (token.address !== "MON") await ensureApproval(token, amountTokenDesired, ROUTER_ADDRESS);
-        tx = await routerContract.addLiquidityETH(
-          token.address,
-          amountTokenDesired,
-          amountTokenDesired.mul(95).div(100),
-          valueETH.mul(95).div(100),
+      if (selectedLP.tokenA.toLowerCase() === WMON_ADDRESS.toLowerCase()) {
+        tx = await routerContract.removeLiquidityETH(
+          selectedLP.tokenB,
+          amountToRemove,
+          amountBMin,
+          amountAMin,
           deadline,
-          { value: valueETH, gasLimit: 6000000 }
+          { gasLimit: 300000 }
+        );
+      } else if (selectedLP.tokenB.toLowerCase() === WMON_ADDRESS.toLowerCase()) {
+        tx = await routerContract.removeLiquidityETH(
+          selectedLP.tokenA,
+          amountToRemove,
+          amountAMin,
+          amountBMin,
+          deadline,
+          { gasLimit: 300000 }
         );
       } else {
-        await ensureApproval(selectedTokenA, amountA_BN, ROUTER_ADDRESS);
-        await ensureApproval(selectedTokenB, amountB_BN, ROUTER_ADDRESS);
-        tx = await routerContract.addLiquidity(
-          selectedTokenA.address,
-          selectedTokenB.address,
-          amountA_BN,
-          amountB_BN,
-          amountA_BN.mul(95).div(100),
-          amountB_BN.mul(95).div(100),
-          { gasLimit: 6000000 }
+        tx = await routerContract.removeLiquidity(
+          selectedLP.tokenA,
+          selectedLP.tokenB,
+          amountToRemove,
+          amountAMin,
+          amountBMin,
+          { gasLimit: 300000 }
         );
       }
-      notify("Adding liquidity...", "info");
+      notify("Removing liquidity...", "info");
       await tx.wait();
-      notify("Liquidity added successfully", "success");
-      fetchBalances();
+      notify("Liquidity removed successfully", "success");
+      fetchLPPositions();
     } catch (error) {
-      console.error("Add liquidity error:", error);
-      notify("Liquidity addition failed: " + (error.reason || error.message), "error");
+      console.error("LP removal error:", error);
+      notify("Liquidity removal failed: " + (error.reason || error.message), "error");
+    }
+  };
+
+  const handleImportLP = async () => {
+    const lpAddress = prompt("Enter LP token address:");
+    if (!lpAddress || !ethers.utils.isAddress(lpAddress)) {
+      notify("Invalid LP address", "error");
+      return;
+    }
+    try {
+      const lpContract = new ethers.Contract(lpAddress, lpTokenABI, provider);
+      const balance = await lpContract.balanceOf(userAddress);
+      if (balance.lte(0)) {
+        notify("No balance found for this LP token", "error");
+        return;
+      }
+      const token0 = await lpContract.token0();
+      const token1 = await lpContract.token1();
+      const token0Contract = new ethers.Contract(token0, erc20ABI, provider);
+      const token1Contract = new ethers.Contract(token1, erc20ABI, provider);
+      const symbol0 = await token0Contract.symbol();
+      const symbol1 = await token1Contract.symbol();
+      const balanceFormatted = ethers.utils.formatUnits(balance, 18);
+      console.log(`Imported LP: ${symbol0}-${symbol1}, Balance: ${balanceFormatted}`);
+      setLpPositions(prev => [
+        ...prev,
+        {
+          address: lpAddress,
+          tokenA: token0,
+          tokenB: token1,
+          symbol: `${symbol0}-${symbol1} LP`,
+          balance: balance.toString(),
+          balanceFormatted,
+        },
+      ]);
+      notify("LP token imported successfully", "success");
+    } catch (error) {
+      console.error("Error importing LP:", error);
+      notify("Failed to import LP: " + (error.reason || error.message), "error");
     }
   };
 
   return (
-    <section id="liquidityTab" className="tabContent">
-      <h2>Add Liquidity</h2>
-      <div className="liquidity-container">
-        <div className="liquidity-input">
-          <label>Token A</label>
-          <div className="input-row">
-            <div className="token-select" onClick={() => openTokenModal('tokenA')}>
-              <img src={selectedTokenA?.logo || "https://via.placeholder.com/24"} alt="Token Logo" className="tokenLogo" />
-              <span>{selectedTokenA?.symbol || "Select Token"}</span>
+    <section id="myLiquidityTab" className="tabContent">
+      <h2>My Liquidity Positions</h2>
+      <div id="myLiquidityList" className="scrollable">
+        {lpPositions.length === 0 ? (
+          <p>No liquidity positions found.</p>
+        ) : (
+          lpPositions.map(lp => (
+            <div
+              key={lp.address}
+              className={`lpTokenItem ${selectedLP?.address === lp.address ? 'selected' : ''}`}
+              onClick={() => handleLPSelect(lp)}
+            >
+              {lp.symbol}: {lp.balanceFormatted}
             </div>
-            <input type="number" value={amountA} onChange={(e) => setAmountA(e.target.value)} placeholder="0" />
-          </div>
-          <div className="balanceInfo">Balance: {balances.tokenA}</div>
-        </div>
-        <div className="liquidity-input">
-          <label>Token B</label>
-          <div className="input-row">
-            <div className="token-select" onClick={() => openTokenModal('tokenB')}>
-              <img src={selectedTokenB?.logo || "https://via.placeholder.com/24"} alt="Token Logo" className="tokenLogo" />
-              <span>{selectedTokenB?.symbol || "Select Token"}</span>
-            </div>
-            <input type="number" value={amountB} onChange={(e) => setAmountB(e.target.value)} placeholder="0" />
-          </div>
-          <div className="balanceInfo">Balance: {balances.tokenB}</div>
-        </div>
-        <button className="actionButton" onClick={handleAddLiquidity}>Add Liquidity</button>
+          ))
+        )}
       </div>
-      {isModalOpen && (
-        <TokenModal
-          tokenList={tokenList}
-          setTokenList={setTokenList}
-          onSelect={handleTokenSelect}
-          onClose={() => setIsModalOpen(false)}
-          provider={provider}
-        />
+      <button className="actionButton" onClick={handleImportLP}>
+        Import LP Token
+      </button>
+      {selectedLP && (
+        <div id="lpRemovalSection">
+          <label htmlFor="removeSlider">
+            Remove %: <span>{removePercentage}%</span>
+          </label>
+          <input
+            type="range"
+            id="removeSlider"
+            min="0"
+            max="99.9999"
+            step="0.0001"
+            value={removePercentage}
+            onChange={(e) => setRemovePercentage(parseFloat(e.target.value))}
+          />
+          <button className="actionButton" onClick={handleRemoveLiquidity}>
+            Remove Liquidity
+          </button>
+        </div>
       )}
     </section>
   );
 }
 
-export default Liquidity;
+export default MyLiquidity;
