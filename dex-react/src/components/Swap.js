@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import TokenModal from './TokenModal';
 import { ethers } from 'ethers';
 import { routerABI } from '../contracts/routerABI';
@@ -6,6 +6,7 @@ import { erc20ABI } from '../contracts/erc20ABI';
 import { factoryABI } from '../contracts/factoryABI';
 import { wmonABI } from '../contracts/wmonABI';
 import { lpTokenABI } from '../contracts/lpTokenABI';
+
 const ROUTER_ADDRESS = "0x144e18DB06B4553b94ED397610D2FBf809790545";
 const FACTORY_ADDRESS = "0xc98d287eFCBbb177D641FD2105dEC57996335766";
 const WMON_ADDRESS = "0xf6C4e67A551bd10444e3b439A4Eb19ec46eC1215";
@@ -21,21 +22,16 @@ function Swap({ wallet, notify, tokenList, setTokenList }) {
   const [modalTarget, setModalTarget] = useState('');
   const { provider, signer, userAddress } = wallet;
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchBalances();
-    }, 15000);
-    fetchBalances();
-    return () => clearInterval(interval);
-  }, [userAddress, selectedTokenA, selectedTokenB]);
-
-  const fetchBalances = async () => {
-    if (!userAddress) return;
-    if (selectedTokenA) await fetchBalanceForToken(selectedTokenA, 'tokenA');
-    if (selectedTokenB) await fetchBalanceForToken(selectedTokenB, 'tokenB');
+  const abbreviateNumber = (num) => {
+    if (num >= 1e12) return (num / 1e12).toFixed(2) + "T";
+    if (num >= 1e9) return (num / 1e9).toFixed(2) + "B";
+    if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
+    if (num >= 1e3) return (num / 1e3).toFixed(2) + "K";
+    return num.toFixed(5);
   };
 
-  const fetchBalanceForToken = async (token, key) => {
+  // Memoized function to fetch the balance for a given token
+  const fetchBalanceForToken = useCallback(async (token, key) => {
     try {
       let balance;
       if (token.address === "MON") {
@@ -49,23 +45,33 @@ function Swap({ wallet, notify, tokenList, setTokenList }) {
     } catch (error) {
       console.error(`Error fetching balance for ${token.symbol}:`, error);
     }
-  };
+  }, [provider, userAddress]);
 
-  const abbreviateNumber = (num) => {
-    if (num >= 1e12) return (num / 1e12).toFixed(2) + "T";
-    if (num >= 1e9) return (num / 1e9).toFixed(2) + "B";
-    if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
-    if (num >= 1e3) return (num / 1e3).toFixed(2) + "K";
-    return num.toFixed(5);
-  };
+  // Memoized function to fetch balances for both tokens
+  const fetchBalances = useCallback(async () => {
+    if (!userAddress) return;
+    if (selectedTokenA) await fetchBalanceForToken(selectedTokenA, 'tokenA');
+    if (selectedTokenB) await fetchBalanceForToken(selectedTokenB, 'tokenB');
+  }, [userAddress, selectedTokenA, selectedTokenB, fetchBalanceForToken]);
 
-  const isStable = async (tokenAddress) => {
+  // Update balances every 15 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchBalances();
+    }, 15000);
+    fetchBalances();
+    return () => clearInterval(interval);
+  }, [fetchBalances]);
+
+  // Memoized isStable function to check for stable coins
+  const isStable = useCallback(async (tokenAddress) => {
     if (tokenAddress === "MON") return false;
     const factoryContract = new ethers.Contract(FACTORY_ADDRESS, factoryABI, provider);
     return await factoryContract.isStableCoin(tokenAddress);
-  };
+  }, [provider]);
 
-  const calculatePriceImpact = async (tokenIn, tokenOut, amountInRaw) => {
+  // Memoized function to calculate the price impact
+  const calculatePriceImpact = useCallback(async (tokenIn, tokenOut, amountInRaw) => {
     if (!tokenIn || !tokenOut || !amountInRaw || parseFloat(amountInRaw) <= 0) return "0%";
     if ((tokenIn.symbol === "MON" && tokenOut.symbol === "WMON") || 
         (tokenIn.symbol === "WMON" && tokenOut.symbol === "MON")) {
@@ -95,8 +101,9 @@ function Swap({ wallet, notify, tokenList, setTokenList }) {
     const effectivePrice = amountOut.mul(ethers.BigNumber.from(10).pow(18)).div(amountIn);
     const priceImpactBN = currentPrice.sub(effectivePrice).mul(10000).div(currentPrice);
     return (priceImpactBN.toNumber() / 100).toFixed(2) + "%";
-  };
+  }, [provider, isStable]);
 
+  // Update swap output when input amount or tokens change
   useEffect(() => {
     const calculateOutput = async () => {
       if (!selectedTokenA || !selectedTokenB || !amountIn || parseFloat(amountIn) <= 0) {
@@ -133,7 +140,7 @@ function Swap({ wallet, notify, tokenList, setTokenList }) {
       }
     };
     calculateOutput();
-  }, [amountIn, selectedTokenA, selectedTokenB]);
+  }, [amountIn, selectedTokenA, selectedTokenB, provider, isStable, calculatePriceImpact]);
 
   const openTokenModal = (target) => {
     setModalTarget(target);
